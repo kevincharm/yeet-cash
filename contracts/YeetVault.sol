@@ -7,7 +7,6 @@ import {AggregatorV2V3Interface} from "@chainlink/contracts/src/v0.8/interfaces/
 import {IERC4626} from "./IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "hardhat/console.sol";
 
 /// @title YeetVault
 /// @notice A smart vault that manages a position in a risky stablecoin (e.g. UST),

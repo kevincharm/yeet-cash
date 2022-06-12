@@ -10,8 +10,12 @@ import {
 const { BigNumber } = ethers
 
 describe('Yeet Vault', () => {
+    /**
+     * This is a simple scenario simulating a depeg event for an imaginary stablecoin "USDX",
+     * and the safe-haven asset set as (a mock implementation of) USDC.
+     */
     it('should run simple scenario', async () => {
-        const [deployer] = await ethers.getSigners()
+        const [deployer, depositooor, liquidatooor] = await ethers.getSigners()
         const mockUsdxPriceFeed = await new MockV3Aggregator__factory(deployer).deploy(
             8,
             100_000_000
@@ -23,38 +27,44 @@ describe('Yeet Vault', () => {
             'yeetUSDX',
             usdx.address,
             usdc.address,
-            5,
-            97_000_000 /** 0.97 liquidation threshold */,
-            95_000_000 /** 0.95 stop-loss */,
+            5 /** number of rounds of the Chainlink price feed to calculate mean price over */,
+            97_000_000 /** 0.97 liquidation threshold in 8dp (chainlink aggregator precision) */,
+            95_000_000 /** 0.95 stop-loss threshold in 8dp (chainlink aggregator precision) */,
             mockUsdxPriceFeed.address
         )
 
-        // Mint 100k USDX to self
+        // Mint 100k USDX to depositooor.
         const usdxAmountToDeposit = ethers.utils.parseEther('100000')
-        await usdx.mint(deployer.address, usdxAmountToDeposit)
-        // Deposit 100k USDX to Yeet Vault
-        await usdx.approve(yeetUsdx.address, usdxAmountToDeposit)
-        await yeetUsdx['deposit(uint256)'](usdxAmountToDeposit)
+        await usdx.mint(depositooor.address, usdxAmountToDeposit)
+        // Deposit 100k USDX to Yeet Vault!
+        await usdx.connect(depositooor).approve(yeetUsdx.address, usdxAmountToDeposit)
+        await yeetUsdx.connect(depositooor)['deposit(uint256)'](usdxAmountToDeposit)
         // In the beginning, USDX:yeetUSDX redemption rate should be 1:1
-        expect(await yeetUsdx.balanceOf(deployer.address)).to.equal(usdxAmountToDeposit)
+        expect(await yeetUsdx.balanceOf(depositooor.address)).to.equal(usdxAmountToDeposit)
 
-        // Simulate depeg to .95 (below threshold of .97)
+        // Simulate depeg of our deposited USDX to .95 (below threshold of .97) by
+        // posting low prices for 10 rounds to the mock Chainlink price feed.
         for (let i = 0; i < 10; i++) {
             await mockUsdxPriceFeed.updateAnswer(95_000_000)
         }
+        // At this point, the protocol should open liquidations and a Keeper will
+        // trigger the state of the vault to "Liquidatable"
         const [isLiquidatable, meanPrice] = await yeetUsdx.isLiquidatable()
         expect(isLiquidatable).to.equal(true)
         expect(meanPrice).to.equal(95_000_000)
-
-        // Simulate a Keeper performing upkeep
+        // Simulate a Keeper performing upkeep.
         await yeetUsdx.performUpkeep('0x00')
 
-        // Liquidate
+        const allUsdxInVault = await usdx.balanceOf(yeetUsdx.address)
+        // Execute a liquidation. IRL this would be performed by any searcher that can
+        // find a better deal for USDX/USDC than the stop-loss specified in this contract (.95)
         const usdcToOffer = BigNumber.from('95000').mul(1e6)
-        // Mint some USDC first
-        await usdc.mint(deployer.address, usdcToOffer)
-        // Offer the USDC at stop-loss rate as liquidation
-        await usdc.approve(yeetUsdx.address, usdcToOffer)
-        await yeetUsdx.yeet(usdcToOffer)
+        // Mint some USDC first. IRL, the liquidatooor would probably use a flashloan.
+        await usdc.mint(liquidatooor.address, usdcToOffer)
+        // Offer the USDC at stop-loss rate as liquidation.
+        await usdc.connect(liquidatooor).approve(yeetUsdx.address, usdcToOffer)
+        await yeetUsdx.connect(liquidatooor).yeet(usdcToOffer)
+        // Protocol gives the liquidatooor all the USDX.
+        expect(await usdx.balanceOf(liquidatooor.address)).to.equal(allUsdxInVault)
     })
 })
